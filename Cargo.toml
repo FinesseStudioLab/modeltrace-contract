@@ -1,0 +1,27 @@
+[workspace]
+resolver = "2"
+members = [
+    "audit-registry",
+    "usage-meter",
+    "payment-router",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.78"
+license = "Apache-2.0"
+repository = "https://github.com/FinesseStudioLab/modeltrace-contract"
+
+[workspace.dependencies]
+soroban-sdk = { version = "27.0.6" }
+
+[profile.release]
+opt-level = "z"
+overflow-checks = true
+debug = 0
+strip = "symbols"
+debug-assertions = false
+panic = "abort"
+codegen-units = 1
+lto = true

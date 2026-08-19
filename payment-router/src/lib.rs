@@ -12,7 +12,9 @@ impl PaymentRouter {
         if env.storage().instance().has(&symbol_short!("admin")) {
             panic!("already initialized");
         }
-        env.storage().instance().set(&symbol_short!("admin"), &admin);
+        env.storage()
+            .instance()
+            .set(&symbol_short!("admin"), &admin);
     }
 
     /// Protocol ping — extend with domain logic.
@@ -26,29 +28,3 @@ impl PaymentRouter {
         1
     }
 }
-
-// patch: 2026-06-01T01:23:04.615380
-
-// patch: 2026-06-03T19:50:46.153840
-
-// patch: 2026-06-04T12:27:41.538455
-
-// patch: 2026-06-07T23:32:18.461530
-
-// patch: 2026-06-08T16:09:13.846145
-
-// patch: 2026-06-17T16:09:13.846140
-
-// patch: 2026-06-25T23:32:18.461520
-
-// patch: 2026-06-28T17:59:59.999980
-
-// patch: 2026-06-30T19:50:46.153825
-
-// patch: 2026-07-02T05:04:36.923055
-
-// patch: 2026-07-03T14:18:27.692285
-
-// patch: 2026-07-04T23:32:18.461515
-
-// patch: 2026-07-06T08:46:09.230745

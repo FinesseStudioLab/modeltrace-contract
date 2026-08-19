@@ -12,7 +12,9 @@ impl UsageMeter {
         if env.storage().instance().has(&symbol_short!("admin")) {
             panic!("already initialized");
         }
-        env.storage().instance().set(&symbol_short!("admin"), &admin);
+        env.storage()
+            .instance()
+            .set(&symbol_short!("admin"), &admin);
     }
 
     /// Protocol ping — extend with domain logic.
@@ -26,27 +28,3 @@ impl UsageMeter {
         1
     }
 }
-
-// patch: 2026-05-30T16:09:13.846150
-
-// patch: 2026-06-01T17:59:59.999995
-
-// patch: 2026-06-02T10:36:55.384610
-
-// patch: 2026-06-06T14:18:27.692300
-
-// patch: 2026-06-10T17:59:59.999990
-
-// patch: 2026-06-11T10:36:55.384605
-
-// patch: 2026-06-16T06:55:23.076910
-
-// patch: 2026-06-16T23:32:18.461525
-
-// patch: 2026-06-18T08:46:09.230755
-
-// patch: 2026-06-27T08:46:09.230750
-
-// patch: 2026-07-01T12:27:41.538440
-
-// patch: 2026-07-05T16:09:13.846130

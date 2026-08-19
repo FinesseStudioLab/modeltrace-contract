@@ -12,7 +12,9 @@ impl AuditRegistry {
         if env.storage().instance().has(&symbol_short!("admin")) {
             panic!("already initialized");
         }
-        env.storage().instance().set(&symbol_short!("admin"), &admin);
+        env.storage()
+            .instance()
+            .set(&symbol_short!("admin"), &admin);
     }
 
     /// Protocol ping — extend with domain logic.
@@ -26,17 +28,3 @@ impl AuditRegistry {
         1
     }
 }
-
-// patch: 2026-05-29T23:32:18.461535
-
-// patch: 2026-06-09T08:46:09.230760
-
-// patch: 2026-06-12T03:13:50.769220
-
-// patch: 2026-06-13T12:27:41.538450
-
-// patch: 2026-06-14T05:04:36.923065
-
-// patch: 2026-06-20T10:36:55.384600
-
-// patch: 2026-07-02T21:41:32.307670
