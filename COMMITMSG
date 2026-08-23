@@ -1,0 +1,9 @@
+fix: Remove the ping() placeholder from all three contracts
+
+- audit-registry\src\lib.rs
+- payment-router\src\lib.rs
+- usage-meter\src\lib.rs
+
+Fixes #43
+
+Signed-off-by: Vedant Madane <6527493+VedantMadane@users.noreply.github.com>
