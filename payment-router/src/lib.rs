@@ -8,8 +8,8 @@
 //! payee pulls what has been released on their own schedule.
 
 use soroban_sdk::{
-    contract, contracterror, contractevent, contractimpl, contracttype, panic_with_error, token,
-    Address, Env, IntoVal,
+    contract, contracterror, contractevent, contractimpl, contracttype, panic_with_error,
+    symbol_short, token, Address, Env, IntoVal, Symbol,
 };
 
 /// Persistent entries are bumped to ~30 days, renewed once inside ~15 days.
@@ -43,6 +43,40 @@ pub enum Error {
     DisputeAlreadyOpen = 10,
     NotTheArbiter = 11,
     SamePayerAndPayee = 12,
+    /// This path has already settled. Returned instead of moving value a
+    /// second time, so a repeated close or a repeated claim against a settled
+    /// escrow is an inert no-op rather than a second payout.
+    AlreadySettled = 13,
+    /// A value-moving entry point was re-entered while an earlier call was
+    /// still in flight. This is the shape a hostile token takes when it calls
+    /// back into the router from inside `transfer`.
+    ReentrantCall = 14,
+}
+
+/// Marker for a value-moving call that is currently in flight.
+///
+/// Deliberately kept out of `DataKey` and in *temporary* storage: it exists
+/// only for the duration of the transaction that sets it, so it is dropped by
+/// the host at the end of the ledger rather than being paid for forever. On a
+/// panic the whole transaction reverts, which unwinds the marker with it.
+const IN_FLIGHT: Symbol = symbol_short!("in_fligh");
+
+/// Take the in-flight marker, or reject the call as re-entrant.
+///
+/// Checks-effects-interactions already makes a second entry unprofitable —
+/// state is committed before any token call — but the two together are what
+/// makes the property hold under a token contract we do not control, rather
+/// than only under one that behaves.
+fn enter(env: &Env) {
+    if env.storage().temporary().has(&IN_FLIGHT) {
+        panic_with_error!(env, Error::ReentrantCall);
+    }
+    env.storage().temporary().set(&IN_FLIGHT, &true);
+}
+
+/// Release the in-flight marker on the normal exit path.
+fn leave(env: &Env) {
+    env.storage().temporary().remove(&IN_FLIGHT);
 }
 
 #[contracttype]
@@ -174,16 +208,21 @@ impl PaymentRouter {
             panic_with_error!(&env, Error::SamePayerAndPayee);
         }
         payer.require_auth_for_args((payee.clone(), token_address.clone(), total).into_val(&env));
+        enter(&env);
 
-        let contract = env.current_contract_address();
-        token::Client::new(&env, &token_address).transfer(&payer, &contract, &total);
-
+        // Effects first: the escrow row is written before the token is asked
+        // to move anything. The deposit is the one call where that ordering is
+        // not sufficient on its own — a row recorded at `total` is briefly a
+        // claim on funds that have not arrived — which is why the deposit runs
+        // inside the in-flight guard as well. A token that calls back here
+        // finds `ReentrantCall`, not an escrow it can close for a refund out
+        // of somebody else's deposit.
         let id = Self::next_id(&env);
         let escrow = Escrow {
             id,
             payer: payer.clone(),
             payee: payee.clone(),
-            token: token_address,
+            token: token_address.clone(),
             total,
             released: 0,
             claimed: 0,
@@ -193,6 +232,10 @@ impl PaymentRouter {
         };
         Self::save(&env, &escrow);
         Self::bump_instance(&env);
+
+        let contract = env.current_contract_address();
+        token::Client::new(&env, &token_address).transfer(&payer, &contract, &total);
+        leave(&env);
 
         EscrowOpened {
             id,
@@ -256,12 +299,23 @@ impl PaymentRouter {
     pub fn claim(env: Env, id: u64) -> i128 {
         let mut escrow = Self::load(&env, id);
         escrow.payee.require_auth();
+        enter(&env);
 
         let amount = escrow.claimable();
         if amount <= 0 {
+            // A closed escrow with nothing left to pull is finished, not
+            // merely empty for the moment. Saying so distinctly is what makes
+            // a repeated `claim` a diagnosable no-op instead of an error the
+            // caller might reasonably retry.
+            if escrow.closed {
+                panic_with_error!(&env, Error::AlreadySettled);
+            }
             panic_with_error!(&env, Error::NothingToClaim);
         }
 
+        // Effects: the pull is recorded before the token is called, so a
+        // callback that re-enters sees `claimed` already advanced and has
+        // nothing left to draw. The guard above closes the same door twice.
         escrow.claimed += amount;
         Self::save(&env, &escrow);
 
@@ -270,6 +324,7 @@ impl PaymentRouter {
             &escrow.payee,
             &amount,
         );
+        leave(&env);
 
         Claimed {
             id,
@@ -352,13 +407,21 @@ impl PaymentRouter {
     /// claimable by the payee afterwards.
     pub fn close_escrow(env: Env, id: u64) {
         let mut escrow = Self::load(&env, id);
-        Self::assert_open(&env, &escrow);
+        // A second close is the double-release case wearing a different hat:
+        // `releasable()` would still read as the remainder if the flag had not
+        // been written first. It has been, so this returns and moves nothing.
+        if escrow.closed {
+            panic_with_error!(&env, Error::AlreadySettled);
+        }
 
         if escrow.disputed > 0 {
             panic_with_error!(&env, Error::DisputeAlreadyOpen);
         }
         escrow.payer.require_auth_for_args((id,).into_val(&env));
+        enter(&env);
 
+        // Effects: closed is committed and the remainder is zeroed out by that
+        // commit before the refund leaves, so the refund cannot be taken twice.
         let refund = escrow.releasable();
         escrow.closed = true;
         Self::save(&env, &escrow);
@@ -370,6 +433,7 @@ impl PaymentRouter {
                 &refund,
             );
         }
+        leave(&env);
 
         EscrowClosed {
             id,
@@ -401,7 +465,7 @@ impl PaymentRouter {
     }
 
     pub fn version(_env: Env) -> u32 {
-        2
+        3
     }
 
     // -----------------------------------------------------------------------
@@ -449,3 +513,6 @@ impl PaymentRouter {
 
 #[cfg(test)]
 mod test;
+
+#[cfg(test)]
+mod invariants;

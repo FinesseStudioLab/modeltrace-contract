@@ -3,3 +3,4 @@ target/
 .DS_Store
 .soroban/
 *.wasm
+test_snapshots/
