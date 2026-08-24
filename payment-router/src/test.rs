@@ -449,3 +449,264 @@ fn test_only_the_payee_can_pull() {
     assert_eq!(f.token().balance(&stranger), 0);
     assert_eq!(f.client().claimable(&id), 1_000);
 }
+
+// ---------------------------------------------------------------------------
+// Failed settlement, recovery, and the dead-letter path
+// ---------------------------------------------------------------------------
+
+/// Advance the ledger far enough for the dead-letter window to open.
+fn advance(f: &Fixture, ledgers: u32) {
+    use soroban_sdk::testutils::Ledger as _;
+    let at = f.env.ledger().sequence();
+    f.env.ledger().set_sequence_number(at + ledgers);
+}
+
+#[test]
+fn test_a_healthy_escrow_reports_zeroed_recovery_state() {
+    let f = setup(10_000);
+    let id = f.open(10_000);
+
+    let state = f.client().settlement_status(&id);
+    assert_eq!(state.failures, 0);
+    assert!(!state.failed);
+    assert!(!state.dead_lettered);
+    // Nothing to recover from, so no dead-letter deadline exists yet.
+    assert_eq!(f.client().dead_letter_at(&id), None);
+}
+
+#[test]
+fn test_a_reported_failure_is_classified_and_preserves_the_claim() {
+    let f = setup(10_000);
+    let id = f.open(10_000);
+    f.client().release_partial(&id, &3_000);
+
+    assert_eq!(
+        f.client().report_failure(&id, &FailureReason::NoTrustline),
+        1
+    );
+
+    let state = f.client().settlement_status(&id);
+    assert_eq!(state.failures, 1);
+    assert_eq!(state.last_reason, FailureReason::NoTrustline);
+    // Below the threshold, so still healthy - and the claim is untouched.
+    assert!(!state.failed);
+    assert_eq!(f.client().claimable(&id), 3_000);
+    assert_eq!(f.token().balance(&f.router), 10_000);
+}
+
+#[test]
+fn test_the_escrow_enters_the_failed_state_after_the_third_attempt() {
+    let f = setup(10_000);
+    let id = f.open(10_000);
+    f.client().release_partial(&id, &3_000);
+
+    for expected in 1..=f.client().max_settlement_failures() {
+        assert_eq!(
+            f.client()
+                .report_failure(&id, &FailureReason::NoDestination),
+            expected
+        );
+    }
+
+    let state = f.client().settlement_status(&id);
+    assert!(state.failed);
+    assert_eq!(state.failed_at, f.env.ledger().sequence());
+    // The value is still the payee's - Failed preserves the claim.
+    assert_eq!(f.client().claimable(&id), 3_000);
+    assert_eq!(
+        f.client().dead_letter_at(&id),
+        Some(state.failed_at + 120_960)
+    );
+}
+
+#[test]
+fn test_a_payee_who_fixes_their_account_pulls_normally_and_clears_the_record() {
+    let f = setup(10_000);
+    let id = f.open(10_000);
+    f.client().release_partial(&id, &3_000);
+
+    for _ in 0..3 {
+        f.client().report_failure(&id, &FailureReason::NoTrustline);
+    }
+    assert!(f.client().settlement_status(&id).failed);
+
+    // Recovery is pull-based: the ordinary claim, once the account works.
+    f.client().clear_failure(&id);
+    assert_eq!(f.client().claim(&id), 3_000);
+    assert_eq!(f.token().balance(&f.payee), 3_000);
+
+    let state = f.client().settlement_status(&id);
+    assert!(!state.failed);
+    assert_eq!(state.failures, 0);
+    assert_eq!(f.client().dead_letter_at(&id), None);
+}
+
+#[test]
+fn test_reporting_a_failure_needs_something_actually_owed() {
+    let f = setup(10_000);
+    let id = f.open(10_000);
+
+    // Nothing released, so no settlement could have been attempted.
+    assert_eq!(
+        f.client().try_report_failure(&id, &FailureReason::Other),
+        Err(Ok(raised(Error::NothingToClaim)))
+    );
+}
+
+#[test]
+fn test_only_the_payee_can_report_a_failure_on_their_own_escrow() {
+    let f = setup(10_000);
+    let id = f.open(10_000);
+    f.client().release_partial(&id, &3_000);
+
+    let stranger = Address::generate(&f.env);
+    f.env.mock_auths(&[MockAuth {
+        address: &stranger,
+        invoke: &MockAuthInvoke {
+            contract: &f.router,
+            fn_name: "report_failure",
+            args: (id,).into_val(&f.env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    assert!(f
+        .client()
+        .try_report_failure(&id, &FailureReason::Other)
+        .is_err());
+    assert_eq!(f.client().settlement_status(&id).failures, 0);
+}
+
+#[test]
+fn test_the_dead_letter_path_is_shut_until_the_delay_elapses() {
+    let f = setup(10_000);
+    let id = f.open(10_000);
+    f.client().release_partial(&id, &3_000);
+    for _ in 0..3 {
+        f.client()
+            .report_failure(&id, &FailureReason::AssetRestricted);
+    }
+
+    // The window exists for the payee's benefit: a frozen asset is fixable.
+    assert_eq!(
+        f.client().try_dead_letter(&id),
+        Err(Ok(raised(Error::DeadLetterNotReady)))
+    );
+    assert_eq!(f.client().claimable(&id), 3_000);
+
+    advance(&f, 120_959);
+    assert_eq!(
+        f.client().try_dead_letter(&id),
+        Err(Ok(raised(Error::DeadLetterNotReady)))
+    );
+}
+
+#[test]
+fn test_dead_lettering_returns_the_value_to_the_payer_and_ends_the_claim() {
+    let f = setup(10_000);
+    let id = f.open(10_000);
+    f.client().release_partial(&id, &3_000);
+    for _ in 0..3 {
+        f.client()
+            .report_failure(&id, &FailureReason::NoDestination);
+    }
+    advance(&f, 120_960);
+
+    assert_eq!(f.client().dead_letter(&id), 3_000);
+
+    // Policy: back to the party that put it in - the only destination that
+    // needs no new trust assumption. Not burned, not kept by the contract.
+    assert_eq!(f.token().balance(&f.payer), 3_000);
+    assert_eq!(f.token().balance(&f.payee), 0);
+    assert_eq!(f.token().balance(&f.router), 7_000);
+
+    // And the swept value is no longer claimable, so it cannot be paid twice.
+    assert!(f.client().settlement_status(&id).dead_lettered);
+    assert_eq!(f.client().claimable(&id), 0);
+    assert_eq!(
+        f.client().try_claim(&id),
+        Err(Ok(raised(Error::NothingToClaim)))
+    );
+}
+
+#[test]
+fn test_a_dead_lettered_escrow_cannot_be_swept_or_reported_again() {
+    let f = setup(10_000);
+    let id = f.open(10_000);
+    f.client().release_partial(&id, &3_000);
+    for _ in 0..3 {
+        f.client().report_failure(&id, &FailureReason::Other);
+    }
+    advance(&f, 120_960);
+    f.client().dead_letter(&id);
+
+    let payer_after = f.token().balance(&f.payer);
+    assert_eq!(
+        f.client().try_dead_letter(&id),
+        Err(Ok(raised(Error::AlreadyDeadLettered)))
+    );
+    assert_eq!(
+        f.client().try_report_failure(&id, &FailureReason::Other),
+        Err(Ok(raised(Error::AlreadyDeadLettered)))
+    );
+    assert_eq!(f.token().balance(&f.payer), payer_after);
+}
+
+#[test]
+fn test_dead_lettering_a_healthy_escrow_is_refused() {
+    let f = setup(10_000);
+    let id = f.open(10_000);
+    f.client().release_partial(&id, &3_000);
+
+    assert_eq!(
+        f.client().try_dead_letter(&id),
+        Err(Ok(raised(Error::SettlementNotFailed)))
+    );
+    assert_eq!(
+        f.client().try_clear_failure(&id),
+        Err(Ok(raised(Error::SettlementNotFailed)))
+    );
+}
+
+#[test]
+fn test_the_dead_letter_sweep_is_the_arbiters_call_not_the_payers() {
+    let f = setup(10_000);
+    let id = f.open(10_000);
+    f.client().release_partial(&id, &3_000);
+    for _ in 0..3 {
+        f.client().report_failure(&id, &FailureReason::NoTrustline);
+    }
+    advance(&f, 120_960);
+
+    // The payer is the beneficiary of the sweep, so letting them trigger it
+    // would reward griefing a payee into the failed state.
+    f.env.mock_auths(&[MockAuth {
+        address: &f.payer,
+        invoke: &MockAuthInvoke {
+            contract: &f.router,
+            fn_name: "dead_letter",
+            args: (id,).into_val(&f.env),
+            sub_invokes: &[],
+        },
+    }]);
+    assert!(f.client().try_dead_letter(&id).is_err());
+    assert_eq!(f.client().claimable(&id), 3_000);
+
+    f.env.mock_all_auths();
+    assert_eq!(f.client().dead_letter(&id), 3_000);
+}
+
+#[test]
+fn test_failure_handling_does_not_disturb_the_arbiters_dispute_path() {
+    let f = setup(10_000);
+    let id = f.open(10_000);
+    f.client().release_partial(&id, &2_000);
+    f.client().report_failure(&id, &FailureReason::NoTrustline);
+
+    // A failing payout on the released portion is unrelated to a dispute over
+    // the remainder; both must still work.
+    f.client().dispute(&id, &5_000);
+    f.client().resolve_dispute(&id, &false);
+    assert_eq!(f.client().releasable(&id), 8_000);
+    assert_eq!(f.client().settlement_status(&id).failures, 1);
+}
