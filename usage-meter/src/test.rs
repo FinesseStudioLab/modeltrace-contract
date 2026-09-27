@@ -4,8 +4,8 @@ extern crate std;
 use super::*;
 use soroban_sdk::{
     contract, contractimpl,
-    testutils::{Address as _, MockAuth, MockAuthInvoke},
-    Env,
+    testutils::{Address as _, Events as _, MockAuth, MockAuthInvoke},
+    Env, Event,
 };
 
 /// Stands in for `audit-registry`, implementing only the one method this
@@ -410,4 +410,52 @@ fn test_cross_contract_verification_cost_is_measured() {
     // ever fails, the batch-root alternative in the issue is worth revisiting.
     assert!(with_cpu > without_cpu);
     assert!(with_cpu - without_cpu < 10_000_000);
+}
+
+#[test]
+fn test_event_shapes_and_versioning() {
+    let f = setup();
+
+    // 1. RegistrySet event
+    let new_registry = f.env.register(StubRegistry, ());
+    f.client().set_registry(&new_registry);
+    let expected_registry_set = RegistrySet {
+        version: EVENT_SCHEMA_VERSION,
+        registry: new_registry.clone(),
+    };
+    assert_eq!(
+        f.env.events().all().filter_by_contract(&f.meter),
+        std::vec![expected_registry_set.to_xdr(&f.env, &f.meter)]
+    );
+
+    // 2. PolicySet event
+    let payer = Address::generate(&f.env);
+    f.client()
+        .set_unattested_policy(&payer, &UnattestedPolicy::RecordUnattested);
+    let expected_policy_set = PolicySet {
+        version: EVENT_SCHEMA_VERSION,
+        payer: payer.clone(),
+        policy: UnattestedPolicy::RecordUnattested,
+    };
+    assert_eq!(
+        f.env.events().all().filter_by_contract(&f.meter),
+        std::vec![expected_policy_set.to_xdr(&f.env, &f.meter)]
+    );
+
+    // 3. UsageRecorded event
+    let id = bytes(&f.env, 1);
+    StubRegistryClient::new(&f.env, &new_registry).attest(&id, &payer);
+    let rec_id = f.client().record_usage(&payer, &Some(id.clone()), &100);
+    let expected_usage_recorded = UsageRecorded {
+        version: EVENT_SCHEMA_VERSION,
+        payer: payer.clone(),
+        attested: true,
+        id: rec_id,
+        units: 100,
+        attestation_id: Some(id),
+    };
+    assert_eq!(
+        f.env.events().all().filter_by_contract(&f.meter),
+        std::vec![expected_usage_recorded.to_xdr(&f.env, &f.meter)]
+    );
 }

@@ -183,9 +183,13 @@ pub struct Settlement {
     pub dead_lettered: bool,
 }
 
+pub const EVENT_SCHEMA_VERSION: u32 = 1;
+
 #[contractevent]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EscrowOpened {
+    #[topic]
+    pub version: u32,
     #[topic]
     pub id: u64,
     #[topic]
@@ -198,6 +202,8 @@ pub struct EscrowOpened {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PartialReleased {
     #[topic]
+    pub version: u32,
+    #[topic]
     pub id: u64,
     pub amount: i128,
     pub released_total: i128,
@@ -207,6 +213,8 @@ pub struct PartialReleased {
 #[contractevent]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Claimed {
+    #[topic]
+    pub version: u32,
     #[topic]
     pub id: u64,
     #[topic]
@@ -218,6 +226,8 @@ pub struct Claimed {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Disputed {
     #[topic]
+    pub version: u32,
+    #[topic]
     pub id: u64,
     pub amount: i128,
 }
@@ -225,6 +235,8 @@ pub struct Disputed {
 #[contractevent]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DisputeResolved {
+    #[topic]
+    pub version: u32,
     #[topic]
     pub id: u64,
     pub amount: i128,
@@ -235,6 +247,8 @@ pub struct DisputeResolved {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EscrowClosed {
     #[topic]
+    pub version: u32,
+    #[topic]
     pub id: u64,
     pub refunded: i128,
 }
@@ -242,6 +256,8 @@ pub struct EscrowClosed {
 #[contractevent]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SettlementFailed {
+    #[topic]
+    pub version: u32,
     #[topic]
     pub id: u64,
     #[topic]
@@ -256,6 +272,8 @@ pub struct SettlementFailed {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SettlementRecovered {
     #[topic]
+    pub version: u32,
+    #[topic]
     pub id: u64,
     #[topic]
     pub payee: Address,
@@ -265,6 +283,8 @@ pub struct SettlementRecovered {
 #[contractevent]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeadLettered {
+    #[topic]
+    pub version: u32,
     #[topic]
     pub id: u64,
     #[topic]
@@ -335,6 +355,7 @@ impl PaymentRouter {
         leave(&env);
 
         EscrowOpened {
+            version: EVENT_SCHEMA_VERSION,
             id,
             payer,
             payee,
@@ -381,6 +402,7 @@ impl PaymentRouter {
         Self::save(&env, &escrow);
 
         PartialReleased {
+            version: EVENT_SCHEMA_VERSION,
             id,
             amount,
             released_total: escrow.released,
@@ -424,6 +446,7 @@ impl PaymentRouter {
         leave(&env);
 
         Claimed {
+            version: EVENT_SCHEMA_VERSION,
             id,
             payee: escrow.payee,
             amount,
@@ -461,7 +484,12 @@ impl PaymentRouter {
         escrow.disputed = amount;
         Self::save(&env, &escrow);
 
-        Disputed { id, amount }.publish(&env);
+        Disputed {
+            version: EVENT_SCHEMA_VERSION,
+            id,
+            amount,
+        }
+        .publish(&env);
     }
 
     /// Resolve an open dispute. Arbiter only.
@@ -490,6 +518,7 @@ impl PaymentRouter {
         Self::save(&env, &escrow);
 
         DisputeResolved {
+            version: EVENT_SCHEMA_VERSION,
             id,
             amount,
             to_payee,
@@ -533,6 +562,7 @@ impl PaymentRouter {
         leave(&env);
 
         EscrowClosed {
+            version: EVENT_SCHEMA_VERSION,
             id,
             refunded: refund,
         }
@@ -579,6 +609,7 @@ impl PaymentRouter {
         Self::save_settlement(&env, &state);
 
         SettlementFailed {
+            version: EVENT_SCHEMA_VERSION,
             id,
             payee: escrow.payee,
             reason,
@@ -622,6 +653,7 @@ impl PaymentRouter {
         );
 
         SettlementRecovered {
+            version: EVENT_SCHEMA_VERSION,
             id,
             payee: escrow.payee,
             amount,
@@ -679,6 +711,7 @@ impl PaymentRouter {
         );
 
         DeadLettered {
+            version: EVENT_SCHEMA_VERSION,
             id,
             payer: escrow.payer,
             amount,
