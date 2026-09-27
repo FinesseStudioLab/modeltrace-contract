@@ -8,11 +8,13 @@
 //! Every signature here is granted deliberately, with `mock_auths`, scoped to
 //! one address, one entrypoint and one exact argument list.
 
+extern crate std;
+
 use super::*;
 use soroban_sdk::{
     auth::{ContractContext, InvokerContractAuthEntry, SubContractInvocation},
-    testutils::{Address as _, MockAuth, MockAuthInvoke},
-    vec, Env, IntoVal,
+    testutils::{Address as _, Events as _, MockAuth, MockAuthInvoke},
+    vec, Env, Event, IntoVal,
 };
 
 // ---------------------------------------------------------------------------
@@ -588,5 +590,86 @@ fn test_double_initialize_is_rejected() {
     assert_eq!(
         f.client().try_initialize(&other),
         Err(Ok(raised(Error::AlreadyInitialized)))
+    );
+}
+
+#[test]
+fn test_event_shapes_and_versioning() {
+    let f = setup();
+    let contract = Address::generate(&f.env);
+
+    // 1. CallerAllowed event
+    f.allow(&contract);
+    let expected_allowed = CallerAllowed {
+        version: EVENT_SCHEMA_VERSION,
+        contract: contract.clone(),
+    };
+    assert_eq!(
+        f.env.events().all().filter_by_contract(&f.registry),
+        std::vec![expected_allowed.to_xdr(&f.env, &f.registry)]
+    );
+
+    // 2. CallerRevoked event
+    f.env.mock_auths(&[MockAuth {
+        address: &f.admin,
+        invoke: &MockAuthInvoke {
+            contract: &f.registry,
+            fn_name: "revoke_caller",
+            args: (contract.clone(),).into_val(&f.env),
+            sub_invokes: &[],
+        },
+    }]);
+    f.client().revoke_caller(&contract);
+    let expected_revoked = CallerRevoked {
+        version: EVENT_SCHEMA_VERSION,
+        contract: contract.clone(),
+    };
+    assert_eq!(
+        f.env.events().all().filter_by_contract(&f.registry),
+        std::vec![expected_revoked.to_xdr(&f.env, &f.registry)]
+    );
+
+    // 3. AttestationRecorded event
+    let subject = Address::generate(&f.env);
+    let id = bytes(&f.env, 1);
+    let policy = bytes(&f.env, 2);
+    f.sign_submit(&subject, &id, &policy);
+    f.client()
+        .submit_attestation(&subject, &subject, &id, &model(&f.env), &policy);
+    let expected_recorded = AttestationRecorded {
+        version: EVENT_SCHEMA_VERSION,
+        id: id.clone(),
+        subject: subject.clone(),
+        submitter: subject.clone(),
+    };
+    assert_eq!(
+        f.env.events().all().filter_by_contract(&f.registry),
+        std::vec![expected_recorded.to_xdr(&f.env, &f.registry)]
+    );
+
+    // 4. AttestationSuperseded event
+    let new_id = bytes(&f.env, 3);
+    f.sign_submit(&subject, &new_id, &policy);
+    f.client()
+        .submit_attestation(&subject, &subject, &new_id, &model(&f.env), &policy);
+
+    f.env.mock_auths(&[MockAuth {
+        address: &subject,
+        invoke: &MockAuthInvoke {
+            contract: &f.registry,
+            fn_name: "supersede_attestation",
+            args: (id.clone(), new_id.clone()).into_val(&f.env),
+            sub_invokes: &[],
+        },
+    }]);
+    f.client().supersede_attestation(&subject, &id, &new_id);
+    let expected_superseded = AttestationSuperseded {
+        version: EVENT_SCHEMA_VERSION,
+        old_id: id,
+        new_id,
+    };
+    assert_eq!(
+        f.env.events().all().filter_by_contract(&f.registry),
+        std::vec![expected_superseded.to_xdr(&f.env, &f.registry)]
     );
 }
