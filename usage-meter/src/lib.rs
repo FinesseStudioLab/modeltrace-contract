@@ -89,9 +89,14 @@ pub struct UsageRecord {
     pub ledger: u32,
 }
 
+/// Canonical event schema version for usage-meter.
+pub const EVENT_SCHEMA_VERSION: u32 = 1;
+
 #[contractevent]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UsageRecorded {
+    #[topic]
+    pub version: u32,
     #[topic]
     pub payer: Address,
     #[topic]
@@ -105,6 +110,8 @@ pub struct UsageRecorded {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PolicySet {
     #[topic]
+    pub version: u32,
+    #[topic]
     pub payer: Address,
     pub policy: UnattestedPolicy,
 }
@@ -112,6 +119,8 @@ pub struct PolicySet {
 #[contractevent]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RegistrySet {
+    #[topic]
+    pub version: u32,
     pub registry: Address,
 }
 
@@ -136,7 +145,11 @@ impl UsageMeter {
         Self::admin(&env).require_auth();
         env.storage().instance().set(&DataKey::Registry, &registry);
         Self::bump_instance(&env);
-        RegistrySet { registry }.publish(&env);
+        RegistrySet {
+            version: EVENT_SCHEMA_VERSION,
+            registry,
+        }
+        .publish(&env);
     }
 
     /// Set a payer's policy for usage with no verifiable attestation.
@@ -154,7 +167,12 @@ impl UsageMeter {
             PERSISTENT_THRESHOLD,
             PERSISTENT_TTL,
         );
-        PolicySet { payer, policy }.publish(&env);
+        PolicySet {
+            version: EVENT_SCHEMA_VERSION,
+            payer,
+            policy,
+        }
+        .publish(&env);
     }
 
     /// A payer's effective policy. Unset means `Reject`.
@@ -248,6 +266,7 @@ impl UsageMeter {
         Self::bump_instance(&env);
 
         UsageRecorded {
+            version: EVENT_SCHEMA_VERSION,
             payer,
             attested,
             id,

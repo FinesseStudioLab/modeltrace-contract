@@ -4,3 +4,5 @@ target/
 .soroban/
 *.wasm
 test_snapshots/
+config.bat
+node_modules
