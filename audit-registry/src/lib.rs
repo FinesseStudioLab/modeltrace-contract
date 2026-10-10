@@ -61,10 +61,15 @@ pub struct Attestation {
     pub superseded_by: Option<BytesN<32>>,
 }
 
+/// Canonical event schema version for audit-registry.
+pub const EVENT_SCHEMA_VERSION: u32 = 1;
+
 /// A contract was admitted to the caller allowlist.
 #[contractevent]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CallerAllowed {
+    #[topic]
+    pub version: u32,
     #[topic]
     pub contract: Address,
 }
@@ -74,12 +79,16 @@ pub struct CallerAllowed {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CallerRevoked {
     #[topic]
+    pub version: u32,
+    #[topic]
     pub contract: Address,
 }
 
 #[contractevent]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AttestationRecorded {
+    #[topic]
+    pub version: u32,
     #[topic]
     pub id: BytesN<32>,
     #[topic]
@@ -90,6 +99,8 @@ pub struct AttestationRecorded {
 #[contractevent]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AttestationSuperseded {
+    #[topic]
+    pub version: u32,
     #[topic]
     pub old_id: BytesN<32>,
     pub new_id: BytesN<32>,
@@ -129,7 +140,11 @@ impl AuditRegistry {
             .instance()
             .set(&DataKey::AllowedCaller(contract.clone()), &());
         Self::bump_instance(&env);
-        CallerAllowed { contract }.publish(&env);
+        CallerAllowed {
+            version: EVENT_SCHEMA_VERSION,
+            contract,
+        }
+        .publish(&env);
     }
 
     /// Remove a contract from the allowlist. Takes effect immediately; already
@@ -141,7 +156,11 @@ impl AuditRegistry {
             .instance()
             .remove(&DataKey::AllowedCaller(contract.clone()));
         Self::bump_instance(&env);
-        CallerRevoked { contract }.publish(&env);
+        CallerRevoked {
+            version: EVENT_SCHEMA_VERSION,
+            contract,
+        }
+        .publish(&env);
     }
 
     pub fn is_caller_allowed(env: Env, contract: Address) -> bool {
@@ -217,6 +236,7 @@ impl AuditRegistry {
         Self::bump_instance(&env);
 
         AttestationRecorded {
+            version: EVENT_SCHEMA_VERSION,
             id,
             subject,
             submitter: caller,
@@ -270,7 +290,12 @@ impl AuditRegistry {
             .persistent()
             .extend_ttl(&key, PERSISTENT_THRESHOLD, PERSISTENT_TTL);
 
-        AttestationSuperseded { old_id, new_id }.publish(&env);
+        AttestationSuperseded {
+            version: EVENT_SCHEMA_VERSION,
+            old_id,
+            new_id,
+        }
+        .publish(&env);
     }
 
     // -----------------------------------------------------------------------
