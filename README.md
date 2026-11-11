@@ -27,7 +27,7 @@ can read and neither party controls.
 
 ---
 
-## The three contracts
+## The three contracts.
 
 | Crate | Role | Holds |
 | --- | --- | --- |
