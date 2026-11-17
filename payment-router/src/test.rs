@@ -1,10 +1,12 @@
 #![cfg(test)]
 
+extern crate std;
+
 use super::*;
 use soroban_sdk::{
-    testutils::{Address as _, MockAuth, MockAuthInvoke},
+    testutils::{Address as _, Events as _, MockAuth, MockAuthInvoke},
     token::{Client as TokenClient, StellarAssetClient},
-    Env,
+    Env, Event,
 };
 
 struct Fixture {
@@ -709,4 +711,146 @@ fn test_failure_handling_does_not_disturb_the_arbiters_dispute_path() {
     f.client().resolve_dispute(&id, &false);
     assert_eq!(f.client().releasable(&id), 8_000);
     assert_eq!(f.client().settlement_status(&id).failures, 1);
+}
+
+#[test]
+fn test_event_shapes_and_versioning() {
+    let f = setup(20_000);
+
+    // 1. EscrowOpened
+    let id = f.open(10_000);
+    let expected_opened = EscrowOpened {
+        version: EVENT_SCHEMA_VERSION,
+        id,
+        payer: f.payer.clone(),
+        payee: f.payee.clone(),
+        total: 10_000,
+    };
+    assert_eq!(
+        f.env.events().all().filter_by_contract(&f.router),
+        std::vec![expected_opened.to_xdr(&f.env, &f.router)]
+    );
+
+    // 2. PartialReleased
+    f.client().release_partial(&id, &3_000);
+    let expected_released = PartialReleased {
+        version: EVENT_SCHEMA_VERSION,
+        id,
+        amount: 3_000,
+        released_total: 3_000,
+        release_count: 1,
+    };
+    assert_eq!(
+        f.env.events().all().filter_by_contract(&f.router),
+        std::vec![expected_released.to_xdr(&f.env, &f.router)]
+    );
+
+    // 3. Claimed
+    f.client().claim(&id);
+    let expected_claimed = Claimed {
+        version: EVENT_SCHEMA_VERSION,
+        id,
+        payee: f.payee.clone(),
+        amount: 3_000,
+    };
+    assert_eq!(
+        f.env.events().all().filter_by_contract(&f.router),
+        std::vec![expected_claimed.to_xdr(&f.env, &f.router)]
+    );
+
+    // 4. Disputed
+    f.client().dispute(&id, &2_000);
+    let expected_disputed = Disputed {
+        version: EVENT_SCHEMA_VERSION,
+        id,
+        amount: 2_000,
+    };
+    assert_eq!(
+        f.env.events().all().filter_by_contract(&f.router),
+        std::vec![expected_disputed.to_xdr(&f.env, &f.router)]
+    );
+
+    // 5. DisputeResolved
+    f.client().resolve_dispute(&id, &true);
+    let expected_resolved = DisputeResolved {
+        version: EVENT_SCHEMA_VERSION,
+        id,
+        amount: 2_000,
+        to_payee: true,
+    };
+    assert_eq!(
+        f.env.events().all().filter_by_contract(&f.router),
+        std::vec![expected_resolved.to_xdr(&f.env, &f.router)]
+    );
+
+    // 6. EscrowClosed
+    f.client().close_escrow(&id);
+    let expected_closed = EscrowClosed {
+        version: EVENT_SCHEMA_VERSION,
+        id,
+        refunded: 5_000,
+    };
+    assert_eq!(
+        f.env.events().all().filter_by_contract(&f.router),
+        std::vec![expected_closed.to_xdr(&f.env, &f.router)]
+    );
+
+    // Now test failure, recovery, and dead-letter on a fresh escrow
+    let id2 = f.open(5_000);
+    f.client().release_partial(&id2, &3_000);
+
+    // 7. SettlementFailed
+    f.client().report_failure(&id2, &FailureReason::NoTrustline);
+    let expected_failed = SettlementFailed {
+        version: EVENT_SCHEMA_VERSION,
+        id: id2,
+        payee: f.payee.clone(),
+        reason: FailureReason::NoTrustline,
+        failures: 1,
+        exhausted: false,
+    };
+    assert_eq!(
+        f.env.events().all().filter_by_contract(&f.router),
+        std::vec![expected_failed.to_xdr(&f.env, &f.router)]
+    );
+
+    // Advance to exhausted failure
+    f.client()
+        .report_failure(&id2, &FailureReason::AssetRestricted);
+    f.client().report_failure(&id2, &FailureReason::Other);
+
+    // 8. SettlementRecovered
+    f.client().clear_failure(&id2);
+    let expected_recovered = SettlementRecovered {
+        version: EVENT_SCHEMA_VERSION,
+        id: id2,
+        payee: f.payee.clone(),
+        amount: 3_000,
+    };
+    assert_eq!(
+        f.env.events().all().filter_by_contract(&f.router),
+        std::vec![expected_recovered.to_xdr(&f.env, &f.router)]
+    );
+
+    // 9. DeadLettered
+    // Trip back to failed state: 3 failures
+    f.client().report_failure(&id2, &FailureReason::NoTrustline);
+    f.client().report_failure(&id2, &FailureReason::NoTrustline);
+    let state_failures = f.client().report_failure(&id2, &FailureReason::NoTrustline);
+    assert_eq!(state_failures, 3);
+
+    advance(&f, DEAD_LETTER_DELAY + 1);
+
+    f.client().dead_letter(&id2);
+    let expected_dead_lettered = DeadLettered {
+        version: EVENT_SCHEMA_VERSION,
+        id: id2,
+        payer: f.payer.clone(),
+        amount: 3_000,
+        reason: FailureReason::NoTrustline,
+    };
+    assert_eq!(
+        f.env.events().all().filter_by_contract(&f.router),
+        std::vec![expected_dead_lettered.to_xdr(&f.env, &f.router)]
+    );
 }

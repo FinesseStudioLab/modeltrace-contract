@@ -88,6 +88,13 @@ Deployable artifacts land in `target/wasm32v1-none/release/*.wasm`.
 └── .github/workflows/    # fmt, clippy, test, WASM build
 ```
 
+## Documentation
+
+- [Cross-Contract Authorization](docs/cross-contract-authorization.md)
+- [Payment Router Value Safety](docs/payment-router-value-safety.md)
+- [Payment Router Settlement Recovery](docs/payment-router-settlement-recovery.md)
+- [Event Schema Catalogue & Compatibility Specification](docs/event-catalogue.md)
+
 ---
 
 ## Contributing
