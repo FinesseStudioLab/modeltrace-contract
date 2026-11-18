@@ -590,3 +590,58 @@ fn test_double_initialize_is_rejected() {
         Err(Ok(raised(Error::AlreadyInitialized)))
     );
 }
+
+#[test]
+fn test_event_schema_version_and_shape() {
+    use soroban_sdk::{testutils::Events as _, Map, Symbol, Val};
+
+    let f = setup();
+    let contract = Address::generate(&f.env);
+
+    f.allow(&contract);
+
+    assert_eq!(
+        f.env.events().all(),
+        vec![
+            &f.env,
+            (
+                f.registry.clone(),
+                vec![
+                    &f.env,
+                    Symbol::new(&f.env, "caller_allowed").into_val(&f.env),
+                    EVENT_SCHEMA_VERSION.into_val(&f.env),
+                    contract.into_val(&f.env),
+                ],
+                Map::<Symbol, Val>::new(&f.env).into_val(&f.env),
+            ),
+        ]
+    );
+
+    f.env.mock_auths(&[MockAuth {
+        address: &f.admin,
+        invoke: &MockAuthInvoke {
+            contract: &f.registry,
+            fn_name: "revoke_caller",
+            args: (contract.clone(),).into_val(&f.env),
+            sub_invokes: &[],
+        },
+    }]);
+    f.client().revoke_caller(&contract);
+
+    assert_eq!(
+        f.env.events().all(),
+        vec![
+            &f.env,
+            (
+                f.registry.clone(),
+                vec![
+                    &f.env,
+                    Symbol::new(&f.env, "caller_revoked").into_val(&f.env),
+                    EVENT_SCHEMA_VERSION.into_val(&f.env),
+                    contract.into_val(&f.env),
+                ],
+                Map::<Symbol, Val>::new(&f.env).into_val(&f.env),
+            ),
+        ]
+    );
+}

@@ -710,3 +710,52 @@ fn test_failure_handling_does_not_disturb_the_arbiters_dispute_path() {
     assert_eq!(f.client().releasable(&id), 8_000);
     assert_eq!(f.client().settlement_status(&id).failures, 1);
 }
+
+#[test]
+fn test_payment_router_event_schema_version_and_shape() {
+    use soroban_sdk::{testutils::Events as _, xdr};
+
+    let f = setup(10_000);
+
+    // 1. EscrowOpened
+    let id = f.open(10_000);
+    let events = f.env.events().all();
+    let last = events.events().last().unwrap();
+    let xdr::ContractEventBody::V0(ref body) = last.body;
+    assert_eq!(body.topics[1], xdr::ScVal::U32(EVENT_SCHEMA_VERSION));
+
+    // 2. PartialReleased
+    f.client().release_partial(&id, &2_000);
+    let events = f.env.events().all();
+    let last = events.events().last().unwrap();
+    let xdr::ContractEventBody::V0(ref body) = last.body;
+    assert_eq!(body.topics[1], xdr::ScVal::U32(EVENT_SCHEMA_VERSION));
+
+    // 3. Claimed
+    f.client().claim(&id);
+    let events = f.env.events().all();
+    let last = events.events().last().unwrap();
+    let xdr::ContractEventBody::V0(ref body) = last.body;
+    assert_eq!(body.topics[1], xdr::ScVal::U32(EVENT_SCHEMA_VERSION));
+
+    // 4. Disputed
+    f.client().dispute(&id, &1_000);
+    let events = f.env.events().all();
+    let last = events.events().last().unwrap();
+    let xdr::ContractEventBody::V0(ref body) = last.body;
+    assert_eq!(body.topics[1], xdr::ScVal::U32(EVENT_SCHEMA_VERSION));
+
+    // 5. DisputeResolved
+    f.client().resolve_dispute(&id, &true);
+    let events = f.env.events().all();
+    let last = events.events().last().unwrap();
+    let xdr::ContractEventBody::V0(ref body) = last.body;
+    assert_eq!(body.topics[1], xdr::ScVal::U32(EVENT_SCHEMA_VERSION));
+
+    // 6. EscrowClosed
+    f.client().close_escrow(&id);
+    let events = f.env.events().all();
+    let last = events.events().last().unwrap();
+    let xdr::ContractEventBody::V0(ref body) = last.body;
+    assert_eq!(body.topics[1], xdr::ScVal::U32(EVENT_SCHEMA_VERSION));
+}

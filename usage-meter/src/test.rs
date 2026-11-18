@@ -411,3 +411,25 @@ fn test_cross_contract_verification_cost_is_measured() {
     assert!(with_cpu > without_cpu);
     assert!(with_cpu - without_cpu < 10_000_000);
 }
+
+#[test]
+fn test_usage_meter_event_schema_version_and_shape() {
+    use soroban_sdk::{testutils::Events as _, xdr};
+
+    let f = setup();
+    let payer = Address::generate(&f.env);
+
+    f.client()
+        .set_unattested_policy(&payer, &UnattestedPolicy::RecordUnattested);
+
+    let all_events = f.env.events().all();
+    let last = all_events.events().last().unwrap();
+    let xdr::ContractEventBody::V0(ref body) = last.body;
+    assert_eq!(body.topics[1], xdr::ScVal::U32(EVENT_SCHEMA_VERSION));
+
+    f.client().record_usage(&payer, &None, &50);
+    let all_events = f.env.events().all();
+    let last = all_events.events().last().unwrap();
+    let xdr::ContractEventBody::V0(ref body) = last.body;
+    assert_eq!(body.topics[1], xdr::ScVal::U32(EVENT_SCHEMA_VERSION));
+}
